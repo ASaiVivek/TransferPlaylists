@@ -36,7 +36,7 @@ public class SecurityConfig {
 						.requestMatchers("/", "/status", "/error").permitAll()
 						.anyRequest().authenticated())
 				.oauth2Login(oauth2 -> oauth2.successHandler(saveTokenAndRedirect()))
-				.logout(logout -> logout.logoutSuccessUrl("/status"));
+				.logout(logout -> logout.logoutSuccessUrl("/"));
 
 		return http.build();
 	}
@@ -55,7 +55,7 @@ public class SecurityConfig {
 				}
 			}
 
-			response.sendRedirect("/status");
+			response.sendRedirect("/");
 		};
 	}
 }

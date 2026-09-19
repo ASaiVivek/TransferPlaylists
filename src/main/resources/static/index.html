@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Transfer Playlists</title>
+	<style>
+		body { font-family: system-ui, sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
+		h1 { font-size: 1.4rem; }
+		.row { display: flex; justify-content: space-between; align-items: center; margin: 0.75rem 0; }
+		.badge { padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.85rem; }
+		.connected { background: #d4edda; color: #155724; }
+		.disconnected { background: #f8d7da; color: #721c24; }
+		a, button { font-size: 1rem; }
+		button { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; }
+		button:disabled { opacity: 0.5; cursor: not-allowed; }
+		#result { margin-top: 1.5rem; white-space: pre-wrap; font-family: monospace; font-size: 0.9rem; }
+	</style>
+</head>
+<body>
+	<h1>Spotify → YouTube Music</h1>
+	<p>Connect both accounts, then transfer your playlists.</p>
+
+	<div class="row">
+		<span>Spotify</span>
+		<span id="spotify-status" class="badge disconnected">Not connected</span>
+	</div>
+	<p><a href="/oauth2/authorization/spotify">Connect Spotify</a></p>
+
+	<div class="row">
+		<span>Google / YouTube</span>
+		<span id="google-status" class="badge disconnected">Not connected</span>
+	</div>
+	<p><a href="/oauth2/authorization/google">Connect Google</a></p>
+
+	<button id="transfer-btn" disabled>Transfer playlists</button>
+	<pre id="result"></pre>
+
+	<script>
+		const spotifyEl = document.getElementById('spotify-status');
+		const googleEl = document.getElementById('google-status');
+		const transferBtn = document.getElementById('transfer-btn');
+		const resultEl = document.getElementById('result');
+
+		function setStatus(el, connected) {
+			el.textContent = connected ? 'Connected' : 'Not connected';
+			el.className = 'badge ' + (connected ? 'connected' : 'disconnected');
+		}
+
+		async function refreshStatus() {
+			const res = await fetch('/status');
+			const data = await res.json();
+			setStatus(spotifyEl, data.spotify);
+			setStatus(googleEl, data.google);
+			transferBtn.disabled = !data.ready;
+		}
+
+		transferBtn.addEventListener('click', async () => {
+			transferBtn.disabled = true;
+			resultEl.textContent = 'Transferring...';
+			try {
+				const res = await fetch('/transfer', { method: 'POST' });
+				const data = await res.json();
+				if (!res.ok) {
+					resultEl.textContent = data.error || 'Transfer failed';
+					return;
+				}
+				resultEl.textContent =
+					'Done!\n' +
+					'Playlists: ' + data.playlistsTransferred + '\n' +
+					'Tracks matched: ' + data.tracksMatched + '\n' +
+					'Tracks skipped: ' + data.tracksSkipped +
+					(data.errors?.length ? '\n\nErrors:\n' + data.errors.join('\n') : '');
+			} catch (e) {
+				resultEl.textContent = 'Transfer failed: ' + e.message;
+			} finally {
+				await refreshStatus();
+			}
+		});
+
+		refreshStatus();
+	</script>
+</body>
+</html>

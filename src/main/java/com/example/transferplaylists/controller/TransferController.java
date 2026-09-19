@@ -25,22 +25,9 @@ public class TransferController {
 		this.playlistTransferService = playlistTransferService;
 	}
 
-	@GetMapping("/")
-	public Map<String, String> home() {
-		Map<String, String> links = new LinkedHashMap<>();
-		links.put("status", "/status");
-		links.put("connectSpotify", "/oauth2/authorization/spotify");
-		links.put("connectGoogle", "/oauth2/authorization/google");
-		links.put("transfer", "POST /transfer");
-		return links;
-	}
-
 	@GetMapping("/status")
 	public Map<String, Object> status() {
-		Map<String, Object> status = new LinkedHashMap<>(providerTokenService.connectionStatus());
-		status.put("connectSpotify", "/oauth2/authorization/spotify");
-		status.put("connectGoogle", "/oauth2/authorization/google");
-		return status;
+		return new LinkedHashMap<>(providerTokenService.connectionStatus());
 	}
 
 	@PostMapping("/transfer")

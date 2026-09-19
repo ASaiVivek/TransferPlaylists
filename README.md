@@ -33,14 +33,11 @@ mvn spring-boot:run
 
 ## Usage
 
-1. Open `http://localhost:8080/status` to check connection state.
-2. Connect Spotify: `http://localhost:8080/oauth2/authorization/spotify`
-3. Connect Google: `http://localhost:8080/oauth2/authorization/google`
-4. Start transfer:
+1. Open `http://localhost:8080` in your browser.
+2. Click **Connect Spotify**, then **Connect Google**.
+3. Click **Transfer playlists** when both show as connected.
 
-```bash
-curl -X POST http://localhost:8080/transfer
-```
+You can also use the API directly: `GET /status` and `POST /transfer`.
 
 The transfer creates private YouTube playlists matching your Spotify playlist names and adds the best-matching YouTube video for each track (`artist + track name` search). Unmatched tracks are skipped.
 
