@@ -1,110 +1,115 @@
 package com.example.transferplaylists.proxies;
 
+import com.example.transferplaylists.exception.ApiClientException;
+import com.example.transferplaylists.model.TrackInfo;
+import com.example.transferplaylists.model.spotify.SpotifyPage;
+import com.example.transferplaylists.model.spotify.SpotifyPlaylist;
+import com.example.transferplaylists.model.spotify.SpotifyPlaylistTrack;
+import com.fasterxml.jackson.databind.JavaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.regex.Pattern;
 
 @Service
 public class SpotifyProxy {
 
-	private final WebClient webClient;
+	private static final Logger log = LoggerFactory.getLogger(SpotifyProxy.class);
+	private static final Pattern PLAYLIST_ID_PATTERN = Pattern.compile("^[A-Za-z0-9]{10,}$");
 
-	public SpotifyProxy(WebClient.Builder webClientBuilder) {
-		this.webClient = webClientBuilder.baseUrl("https://api.spotify.com/v1").build();
+	private final WebClient webClient;
+	private final ObjectMapper objectMapper;
+
+	public SpotifyProxy(WebClient spotifyWebClient, ObjectMapper objectMapper) {
+		this.webClient = spotifyWebClient;
+		this.objectMapper = objectMapper;
 	}
 
-	@SuppressWarnings("unchecked")
-	public List<Map<String, Object>> getPlaylists(String accessToken) {
-		var playlists = new ArrayList<Map<String, Object>>();
-		String nextUrl = "/me/playlists?limit=50";
+	public List<SpotifyPlaylist> getPlaylists(String accessToken) {
+		var playlists = new ArrayList<SpotifyPlaylist>();
+		String nextPath = "/me/playlists?limit=50";
 
-		while (nextUrl != null) {
-			Map<String, Object> response = fetch(accessToken, nextUrl);
-			if (response == null) {
-				break;
+		while (nextPath != null) {
+			SpotifyPage<SpotifyPlaylist> page = fetchPage(accessToken, nextPath, SpotifyPlaylist.class);
+			if (page.items() != null) {
+				playlists.addAll(page.items());
 			}
-
-			playlists.addAll((List<Map<String, Object>>) response.get("items"));
-			nextUrl = extractNextPath(response.get("next"));
+			nextPath = extractNextPath(page.next());
 		}
 
 		return playlists;
 	}
 
-	@SuppressWarnings("unchecked")
-	public List<Map<String, String>> getPlaylistTracks(String playlistId, String accessToken) {
-		var tracks = new ArrayList<Map<String, String>>();
-		String nextUrl = "/playlists/" + playlistId + "/tracks?limit=100";
+	public List<TrackInfo> getPlaylistTracks(String playlistId, String accessToken) {
+		validatePlaylistId(playlistId);
 
-		while (nextUrl != null) {
-			Map<String, Object> response = fetch(accessToken, nextUrl);
-			if (response == null) {
-				break;
+		var tracks = new ArrayList<TrackInfo>();
+		String nextPath = "/playlists/" + playlistId + "/tracks?limit=100";
+
+		while (nextPath != null) {
+			SpotifyPage<SpotifyPlaylistTrack> page = fetchPage(accessToken, nextPath, SpotifyPlaylistTrack.class);
+			if (page.items() != null) {
+				page.items().stream()
+						.map(SpotifyPlaylistTrack::track)
+						.filter(track -> track != null && track.name() != null)
+						.map(track -> new TrackInfo(track.name(), extractArtistNames(track.artists())))
+						.forEach(tracks::add);
 			}
-
-			tracks.addAll(parseTracks(response));
-			nextUrl = extractNextPath(response.get("next"));
+			nextPath = extractNextPath(page.next());
 		}
 
 		return tracks;
 	}
 
-	private Map<String, Object> fetch(String accessToken, String uri) {
+	private <T> SpotifyPage<T> fetchPage(String accessToken, String uri, Class<T> itemType) {
 		try {
-			return webClient.get()
+			String body = webClient.get()
 					.uri(uri)
 					.header("Authorization", "Bearer " + accessToken)
 					.retrieve()
-					.bodyToMono(Map.class)
+					.bodyToMono(String.class)
 					.block();
+
+			JavaType pageType = objectMapper.getTypeFactory()
+					.constructParametricType(SpotifyPage.class, itemType);
+			return objectMapper.readValue(body, pageType);
 		} catch (WebClientResponseException e) {
-			System.err.println("Error fetching from Spotify: " + e.getMessage());
+			log.error("Spotify API request failed: {} {}", e.getStatusCode(), e.getMessage());
+			throw new ApiClientException("spotify", "Failed to fetch data from Spotify", e.getStatusCode().value());
+		} catch (Exception e) {
+			log.error("Failed to parse Spotify response", e);
+			throw new ApiClientException("spotify", "Failed to parse Spotify response");
+		}
+	}
+
+	private String extractNextPath(String next) {
+		if (next == null || next.isBlank()) {
 			return null;
 		}
+		return next.replace("https://api.spotify.com/v1", "");
 	}
 
-	private String extractNextPath(Object next) {
-		if (next == null) {
-			return null;
-		}
-
-		String nextUrl = (String) next;
-		return nextUrl.replace("https://api.spotify.com/v1", "");
-	}
-
-	@SuppressWarnings("unchecked")
-	private List<Map<String, String>> parseTracks(Map<String, Object> response) {
-		var tracks = new ArrayList<Map<String, String>>();
-		if (response == null || !response.containsKey("items")) {
-			return tracks;
-		}
-
-		List<Map<String, Object>> items = (List<Map<String, Object>>) response.get("items");
-		for (Map<String, Object> item : items) {
-			Map<String, Object> track = (Map<String, Object>) item.get("track");
-			if (track != null && track.get("name") != null) {
-				tracks.add(Map.of(
-						"name", (String) track.get("name"),
-						"artist", extractArtistNames((List<Map<String, Object>>) track.get("artists"))));
-			}
-		}
-
-		return tracks;
-	}
-
-	private String extractArtistNames(List<Map<String, Object>> artists) {
+	private String extractArtistNames(List<com.example.transferplaylists.model.spotify.SpotifyArtist> artists) {
 		if (artists == null || artists.isEmpty()) {
 			return "Unknown Artist";
 		}
 
-		var artistNames = new ArrayList<String>();
-		for (Map<String, Object> artist : artists) {
-			artistNames.add((String) artist.get("name"));
+		return artists.stream()
+				.map(com.example.transferplaylists.model.spotify.SpotifyArtist::name)
+				.filter(name -> name != null && !name.isBlank())
+				.reduce((left, right) -> left + ", " + right)
+				.orElse("Unknown Artist");
+	}
+
+	private void validatePlaylistId(String playlistId) {
+		if (playlistId == null || !PLAYLIST_ID_PATTERN.matcher(playlistId).matches()) {
+			throw new IllegalArgumentException("Invalid Spotify playlist id");
 		}
-		return String.join(", ", artistNames);
 	}
 }

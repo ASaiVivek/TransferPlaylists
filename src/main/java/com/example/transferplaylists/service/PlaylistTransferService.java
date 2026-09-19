@@ -1,15 +1,21 @@
 package com.example.transferplaylists.service;
 
+import com.example.transferplaylists.exception.ApiClientException;
+import com.example.transferplaylists.model.TrackInfo;
 import com.example.transferplaylists.model.TransferResult;
+import com.example.transferplaylists.model.spotify.SpotifyPlaylist;
 import com.example.transferplaylists.proxies.SpotifyProxy;
 import com.example.transferplaylists.proxies.YouTubeProxy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
-import java.util.Map;
 
 @Service
 public class PlaylistTransferService {
+
+	private static final Logger log = LoggerFactory.getLogger(PlaylistTransferService.class);
 
 	private final SpotifyProxy spotifyProxy;
 	private final YouTubeProxy youTubeProxy;
@@ -21,28 +27,42 @@ public class PlaylistTransferService {
 
 	public TransferResult transfer(String spotifyToken, String youtubeToken) {
 		var result = new TransferResult();
-		List<Map<String, Object>> playlists = spotifyProxy.getPlaylists(spotifyToken);
 
-		for (Map<String, Object> playlist : playlists) {
-			String playlistId = (String) playlist.get("id");
-			String playlistName = extractPlaylistName(playlist);
-
-			if (playlistId == null || playlistName == null) {
-				result.addError("Skipped playlist with missing id or name");
-				continue;
+		try {
+			List<SpotifyPlaylist> playlists = spotifyProxy.getPlaylists(spotifyToken);
+			for (SpotifyPlaylist playlist : playlists) {
+				transferPlaylist(playlist, spotifyToken, youtubeToken, result);
 			}
-
-			var youtubePlaylistId = youTubeProxy.createPlaylist(playlistName, youtubeToken);
-			if (youtubePlaylistId.isEmpty()) {
-				result.addError("Failed to create YouTube playlist: " + playlistName);
-				continue;
-			}
-
-			result.incrementPlaylistsTransferred();
-			transferTracks(playlistId, youtubePlaylistId.get(), spotifyToken, youtubeToken, result);
+		} catch (ApiClientException e) {
+			log.error("Spotify transfer failed", e);
+			result.addError("Failed to fetch Spotify playlists: " + e.getMessage());
 		}
 
 		return result;
+	}
+
+	private void transferPlaylist(
+			SpotifyPlaylist playlist,
+			String spotifyToken,
+			String youtubeToken,
+			TransferResult result) {
+		if (playlist.id() == null || playlist.name() == null) {
+			result.addError("Skipped playlist with missing id or name");
+			return;
+		}
+
+		try {
+			var youtubePlaylistId = youTubeProxy.createPlaylist(playlist.name(), youtubeToken);
+			if (youtubePlaylistId.isEmpty()) {
+				result.addError("Failed to create YouTube playlist: " + playlist.name());
+				return;
+			}
+
+			result.incrementPlaylistsTransferred();
+			transferTracks(playlist.id(), youtubePlaylistId.get(), spotifyToken, youtubeToken, result);
+		} catch (ApiClientException e) {
+			result.addError("Failed to create YouTube playlist '" + playlist.name() + "': " + e.getMessage());
+		}
 	}
 
 	private void transferTracks(
@@ -51,27 +71,28 @@ public class PlaylistTransferService {
 			String spotifyToken,
 			String youtubeToken,
 			TransferResult result) {
-		List<Map<String, String>> tracks = spotifyProxy.getPlaylistTracks(spotifyPlaylistId, spotifyToken);
+		try {
+			List<TrackInfo> tracks = spotifyProxy.getPlaylistTracks(spotifyPlaylistId, spotifyToken);
 
-		for (Map<String, String> track : tracks) {
-			String query = track.get("artist") + " " + track.get("name");
-			var videoId = youTubeProxy.searchVideo(query, youtubeToken);
+			for (TrackInfo track : tracks) {
+				String query = track.artist() + " " + track.name();
+				var videoId = youTubeProxy.searchVideo(query, youtubeToken);
 
-			if (videoId.isEmpty()) {
-				result.incrementTracksSkipped();
-				continue;
+				if (videoId.isEmpty()) {
+					result.incrementTracksSkipped();
+					continue;
+				}
+
+				if (youTubeProxy.addVideoToPlaylist(youtubePlaylistId, videoId.get(), youtubeToken)) {
+					result.incrementTracksMatched();
+				} else {
+					result.incrementTracksSkipped();
+				}
 			}
-
-			if (youTubeProxy.addVideoToPlaylist(youtubePlaylistId, videoId.get(), youtubeToken)) {
-				result.incrementTracksMatched();
-			} else {
-				result.incrementTracksSkipped();
-			}
+		} catch (ApiClientException e) {
+			result.addError("Failed to fetch tracks for playlist " + spotifyPlaylistId + ": " + e.getMessage());
+		} catch (IllegalArgumentException e) {
+			result.addError("Invalid playlist id: " + spotifyPlaylistId);
 		}
-	}
-
-	private String extractPlaylistName(Map<String, Object> playlist) {
-		Object name = playlist.get("name");
-		return name instanceof String ? (String) name : null;
 	}
 }
